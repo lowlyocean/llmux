@@ -22,8 +22,12 @@ use tokio::sync::Notify;
 pub struct PolicyContext {
     /// The model that the pending request is for
     pub target_model: String,
+    /// Priority of the target model. None = default (low).
+    pub target_priority: Option<u8>,
     /// Currently active/awake model (if any)
     pub active_model: Option<String>,
+    /// Priority of the currently active model. None = default (low).
+    pub active_priority: Option<u8>,
     /// Number of requests queued for the target model
     pub target_queue_depth: usize,
     /// How long the oldest request has been waiting
@@ -43,10 +47,15 @@ pub struct PolicyContext {
 pub struct ScheduleContext {
     /// Currently active/awake model (if any)
     pub active_model: Option<String>,
+    /// Priority of the currently active model. None = default (low).
+    pub active_priority: Option<u8>,
     /// How long the active model has been awake
     pub active_duration: Duration,
     /// Number of pending requests per model
     pub queue_depths: HashMap<String, usize>,
+    /// Priority of each model (lower = higher priority).
+    /// Missing entries mean no priority set (treated as low).
+    pub model_priorities: HashMap<String, u8>,
     /// Number of in-flight requests for the active model
     pub active_in_flight: usize,
     /// Estimated switch costs from the active model to each other model.

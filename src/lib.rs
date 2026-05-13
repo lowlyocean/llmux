@@ -71,8 +71,19 @@ pub async fn build_app(config: Config) -> Result<(Router, ModelSwitcher)> {
     info!("Building llmux with {} models", config.models.len());
 
     let hooks = Arc::new(HookRunner::new(config.models.clone()));
-    let policy = config.policy.build_policy();
-    let switcher = ModelSwitcher::new(hooks, policy);
+
+    // Build priority map: model_name → Some(priority_value) or None (default)
+    let priorities: std::collections::HashMap<String, Option<u8>> = config
+        .models
+        .iter()
+        .map(|(name, m)| {
+            let p = m.priority.as_ref().map(|p| p.value());
+            (name.clone(), p)
+        })
+        .collect();
+
+   let policy = config.policy.build_policy(priorities.clone());
+    let switcher = ModelSwitcher::new(hooks, policy, priorities);
 
     // Spawn background scheduler if the policy uses one
     let _scheduler_handle = switcher.clone().spawn_scheduler();
@@ -87,14 +98,17 @@ pub async fn build_app(config: Config) -> Result<(Router, ModelSwitcher)> {
     let models_response = {
         let mut data: Vec<_> = config
             .models
-            .keys()
-            .map(|id| {
-                serde_json::json!({
+            .into_iter().map(|(id, model)| {
+                let mut obj = serde_json::json!({
                     "id": id,
                     "object": "model",
                     "created": 0,
                     "owned_by": "llmux"
-                })
+                });
+                if let Some(p) = model.priority.as_ref().map(|p| p.value()) {
+                    obj["priority"] = serde_json::Value::Number(serde_json::Number::from(p));
+                }
+                obj
             })
             .collect::<Vec<_>>();
         data.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));

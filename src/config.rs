@@ -11,6 +11,30 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
+/// Priority level for a model (lower = higher priority).
+///
+/// Lower numbers get served first. Priority 0 is highest.
+/// A model with a higher priority won't be switched out until
+/// all requests for higher-priority models have been served.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelPriority {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+
+impl ModelPriority {
+    pub fn value(&self) -> u8 {
+        match self {
+            Self::Low => 0,
+            Self::Medium => 1,
+            Self::High => 2,
+        }
+    }
+}
+
 /// Top-level configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -66,6 +90,14 @@ pub struct ModelConfig {
     /// Called with LLMUX_MODEL env var set to the model name.
     /// Exit 0 = healthy, non-zero = unhealthy.
     pub alive: String,
+
+    /// Priority of this model (lower = served first).
+    ///
+    /// Lower numbers get served first. A model with a higher priority
+    /// won't be switched out until all requests for higher-priority
+    /// models have been served.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub priority: Option<ModelPriority>,
 }
 
 fn default_port() -> u16 {
@@ -122,11 +154,15 @@ fn default_drain_before_switch() -> bool {
 }
 
 impl PolicyConfig {
-    pub fn build_policy(&self) -> Box<dyn crate::policy::SwitchPolicy> {
+    pub fn build_policy(
+        &self,
+        priorities: std::collections::HashMap<String, Option<u8>>,
+    ) -> Box<dyn crate::policy::SwitchPolicy> {
         Box::new(crate::policy::FifoPolicy::new(
             self.request_timeout_secs.map(Duration::from_secs),
             self.drain_before_switch,
             Duration::from_secs(self.min_active_secs),
+            priorities,
         ))
     }
 }

@@ -91,15 +91,17 @@ fn test_config(
             wake: hooks_a.wake.clone(),
             sleep: hooks_a.sleep.clone(),
             alive: hooks_a.alive.clone(),
+            priority: None,
         },
     );
     models.insert(
         "model-b".to_string(),
-        ModelConfig {
+          ModelConfig {
             port: model_b_port,
             wake: hooks_b.wake.clone(),
             sleep: hooks_b.sleep.clone(),
             alive: hooks_b.alive.clone(),
+            priority: None,
         },
     );
 

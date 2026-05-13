@@ -68,6 +68,8 @@ struct SwitcherInner {
     state: RwLock<SwitcherState>,
     model_states: HashMap<String, Arc<ModelState>>,
     switch_lock: Mutex<()>,
+    /// Model priorities: model_name → Some(priority_value) or None (default)
+    priorities: HashMap<String, Option<u8>>,
     /// When the currently active model was activated (for cooldown enforcement)
     activated_at: RwLock<Option<Instant>>,
     /// When the last switch failure occurred (for backoff)
@@ -90,7 +92,11 @@ impl Clone for ModelSwitcher {
 }
 
 impl ModelSwitcher {
-    pub fn new(hooks: Arc<HookRunner>, policy: Box<dyn SwitchPolicy>) -> Self {
+    pub fn new(
+        hooks: Arc<HookRunner>,
+        policy: Box<dyn SwitchPolicy>,
+        priorities: HashMap<String, Option<u8>>,
+    ) -> Self {
         let model_states: HashMap<String, Arc<ModelState>> = hooks
             .registered_models()
             .into_iter()
@@ -104,6 +110,7 @@ impl ModelSwitcher {
                 state: RwLock::new(SwitcherState::Idle),
                 model_states,
                 switch_lock: Mutex::new(()),
+                priorities,
                 activated_at: RwLock::new(None),
                 last_switch_failure: RwLock::new(None),
                 cost_tracker: SwitchCostTracker::new(0.3),
@@ -134,8 +141,12 @@ impl ModelSwitcher {
         self.inner.model_states.contains_key(model)
     }
 
-    pub fn model_port(&self, model: &str) -> Option<u16> {
+   pub fn model_port(&self, model: &str) -> Option<u16> {
         self.inner.hooks.model_port(model)
+    }
+
+    pub fn model_priority(&self, model: &str) -> Option<u8> {
+        self.inner.priorities.get(model).copied().flatten()
     }
 
     pub fn in_flight_count(&self, model: &str) -> usize {
@@ -345,7 +356,11 @@ impl ModelSwitcher {
 
             PolicyContext {
                 target_model: target_model.to_string(),
-                active_model,
+  target_priority: self.inner.priorities.get(target_model).copied().flatten(),
+                active_model: active_model.clone(),
+                active_priority: active_model
+                    .as_ref()
+                    .and_then(|m| self.inner.priorities.get(m).copied().flatten()),
                 target_queue_depth: queue.len(),
                 oldest_waiting,
                 active_in_flight,
@@ -652,11 +667,15 @@ impl ModelSwitcher {
         }
     }
 
-    async fn build_schedule_context(&self) -> ScheduleContext {
+  async fn build_schedule_context(&self) -> ScheduleContext {
         let (active_model, active_in_flight) = match &*self.inner.state.read().await {
             SwitcherState::Active { model } => (Some(model.clone()), self.in_flight_count(model)),
             _ => (None, 0),
         };
+
+        let active_priority = active_model
+            .as_ref()
+            .and_then(|m| self.inner.priorities.get(m).copied().flatten());
 
         let active_duration = self
             .inner
@@ -668,6 +687,14 @@ impl ModelSwitcher {
 
         let queue_depths = self.queue_depths().await;
 
+               let model_priorities = self
+            .inner
+            .priorities
+            .clone()
+            .into_iter()
+            .map(|(k, v)| (k, v.unwrap_or(0)))
+            .collect();
+
         let switch_costs = self
             .inner
             .cost_tracker
@@ -675,8 +702,10 @@ impl ModelSwitcher {
 
         ScheduleContext {
             active_model,
+            active_priority,
             active_duration,
             queue_depths,
+            model_priorities,
             active_in_flight,
             switch_costs,
         }
@@ -808,6 +837,7 @@ mod tests {
                 wake: "true".to_string(),
                 sleep: "true".to_string(),
                 alive: "true".to_string(),
+                priority: None,
             },
         );
         configs.insert(
@@ -817,16 +847,22 @@ mod tests {
                 wake: "true".to_string(),
                 sleep: "true".to_string(),
                 alive: "true".to_string(),
+                priority: None,
             },
         );
         Arc::new(HookRunner::new(configs))
     }
 
-    #[test]
-    fn test_switcher_creation() {
+    fn make_test_switcher() -> ModelSwitcher {
         let hooks = make_test_hooks();
         let policy = Box::new(FifoPolicy::default());
-        let switcher = ModelSwitcher::new(hooks, policy);
+        let priorities: HashMap<String, Option<u8>> = HashMap::new();
+        ModelSwitcher::new(hooks, policy, priorities)
+    }
+
+    #[test]
+    fn test_switcher_creation() {
+        let switcher = make_test_switcher();
 
         assert!(switcher.is_registered("model-a"));
         assert!(switcher.is_registered("model-b"));
@@ -835,9 +871,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_in_flight_tracking() {
-        let hooks = make_test_hooks();
-        let policy = Box::new(FifoPolicy::default());
-        let switcher = ModelSwitcher::new(hooks, policy);
+        let switcher = make_test_switcher();
 
         assert_eq!(switcher.in_flight_count("model-a"), 0);
 
@@ -851,9 +885,7 @@ mod tests {
 
     #[test]
     fn test_acquire_in_flight_rejected_while_draining() {
-        let hooks = make_test_hooks();
-        let policy = Box::new(FifoPolicy::default());
-        let switcher = ModelSwitcher::new(hooks, policy);
+        let switcher = make_test_switcher();
 
         let guard = switcher.acquire_in_flight("model-a");
         assert!(guard.is_some());
@@ -878,9 +910,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_model_port() {
-        let hooks = make_test_hooks();
-        let policy = Box::new(FifoPolicy::default());
-        let switcher = ModelSwitcher::new(hooks, policy);
+        let switcher = make_test_switcher();
 
         assert_eq!(switcher.model_port("model-a"), Some(8001));
         assert_eq!(switcher.model_port("model-b"), Some(8002));
@@ -889,9 +919,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_force_switch_unknown_model() {
-        let hooks = make_test_hooks();
-        let policy = Box::new(FifoPolicy::default());
-        let switcher = ModelSwitcher::new(hooks, policy);
+        let switcher = make_test_switcher();
 
         let result = switcher.force_switch("nonexistent").await;
         assert!(matches!(result, Err(SwitchError::ModelNotFound(_))));
@@ -899,9 +927,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_force_switch_already_active() {
-        let hooks = make_test_hooks();
-        let policy = Box::new(FifoPolicy::default());
-        let switcher = ModelSwitcher::new(hooks, policy);
+        let switcher = make_test_switcher();
 
         {
             let mut state = switcher.inner.state.write().await;
