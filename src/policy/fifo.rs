@@ -5,7 +5,8 @@ use std::time::Duration;
 /// FIFO policy with priority support — switch immediately on first request
 /// for a non-active model, unless a higher-priority model has pending requests.
 ///
-/// Lower priority values = higher priority. Priority 0 (None/default) is lowest.
+/// Higher priority values = more important. A model with a higher priority
+/// won't be switched out when a lower-priority model has pending requests.
 /// A model with a lower priority value won't be switched in if a higher-priority
 /// model has pending requests.
 pub struct FifoPolicy {
@@ -45,15 +46,15 @@ impl Default for FifoPolicy {
 impl SwitchPolicy for FifoPolicy {
     async fn on_pending_request(&self, ctx: &PolicyContext) -> PolicyDecision {
         // Priority-based switch decision:
-        //   - target_priority < active_priority → switch (target is higher prio)
-        //   - target_priority > active_priority → skip (stay on higher-prio model)
+        //   - target_priority > active_priority → switch (target is higher prio)
+        //   - target_priority < active_priority → skip (stay on higher-prio model)
         //   - same priority or either is None → FIFO: switch immediately
         if let (Some(tp), Some(ap)) = (ctx.target_priority, ctx.active_priority) {
-            if tp > ap {
+            if tp < ap {
                 // Target is lower priority than active — skip, stay on active
                 return PolicyDecision::Skip;
             }
-            if tp < ap {
+            if tp > ap {
                 // Target is higher priority — switch
                 return PolicyDecision::SwitchNow;
             }

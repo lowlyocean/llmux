@@ -1,0 +1,41 @@
+# llmux configuration for Portainer + vLLM stack
+#
+# Each vLLM service runs a model behind a dedicated container. llmux acts
+# as a single-entry-point proxy on port 3000, routing requests to whichever
+# vLLM service is available.
+#
+# Priority ordering (higher value = served first):
+#   home_assistant: high (highest priority, always served first)
+#   images: medium
+#   embeddings: low (lowest, preempted by others)
+#
+# This maps directly to the llama.cpp presets.ini [home_assistant],
+# [images], [embeddings] sections where the `priority` key is used.
+#
+# Deploy via Portainer stack:
+#   - docker-compose.yml and this config.yaml live in a Git repo.
+#   - Point Portainer to the repo → Portainer deploys all services.
+
+models:
+  home_assistant:
+    port: 8001
+    wake: curl -sf http://localhost:8001/health
+    sleep: curl -sf http://localhost:8001/health
+    alive: curl -sf http://localhost:8001/health
+    priority: high
+
+  images:
+    port: 8002
+    wake: curl -sf http://localhost:8002/health
+    sleep: curl -sf http://localhost:8002/health
+    alive: curl -sf http://localhost:8002/health
+    priority: medium
+
+  embeddings:
+    port: 8003
+    wake: curl -sf http://localhost:8003/health
+    sleep: curl -sf http://localhost:8003/health
+    alive: curl -sf http://localhost:8003/health
+    priority: low
+
+port: 3000

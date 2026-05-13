@@ -11,26 +11,32 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
-/// Priority level for a model (lower = higher priority).
+/// Priority of a model for scheduling decisions.
 ///
-/// Lower numbers get served first. Priority 0 is highest.
-/// A model with a higher priority won't be switched out until
-/// all requests for higher-priority models have been served.
+/// Higher values mean the model is more important and less likely to be
+/// switched out by an incoming request for a lower-priority model.
+///
+/// At the scheduling level, priority influences the decision boundary between
+/// switching and staying: the threshold at which a switch is triggered is
+/// shifted upward for higher-priority models, making them more resistant to
+/// preemption.
+///
+/// A model without an explicit priority gets a default priority of 1.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelPriority {
     #[default]
-    Low,
-    Medium,
-    High,
+    Low,    // 1
+    Medium, // 2
+    High,   // 3
 }
 
 impl ModelPriority {
     pub fn value(&self) -> u8 {
         match self {
-            Self::Low => 0,
-            Self::Medium => 1,
-            Self::High => 2,
+            Self::Low => 1,
+            Self::Medium => 2,
+            Self::High => 3,
         }
     }
 }
@@ -91,11 +97,11 @@ pub struct ModelConfig {
     /// Exit 0 = healthy, non-zero = unhealthy.
     pub alive: String,
 
-    /// Priority of this model (lower = served first).
+    /// Priority of this model for scheduling.
     ///
-    /// Lower numbers get served first. A model with a higher priority
-    /// won't be switched out until all requests for higher-priority
-    /// models have been served.
+    /// Higher values mean the model is more important and less likely to be
+    /// preempted by an incoming request for a lower-priority model.
+    /// Defaults to `low` (1) if omitted.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub priority: Option<ModelPriority>,
 }
