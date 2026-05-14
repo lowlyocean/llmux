@@ -1,8 +1,15 @@
 version: "3.8"
 
-# Portainer stack for llmux + vLLM services
+# Portainer stack for llmux + vLLM services with CRIU checkpoint/restore
 #
 # llmux routes requests based on availability and priority, exposing on port 11434.
+# Only ONE model runs at a time — others are checkpointed (free GPU memory via CRIU).
+#
+# Checkpoint workflow:
+#   - When switching away from a model, llmux runs `docker checkpoint create` (CRIU)
+#   - The model container stops, GPU memory is freed, state is saved to disk
+#   - On next request for that model, llmux runs `docker start --checkpoint`
+#   - Restore is ~10-15s vs ~60-100s cold start
 #
 # Deploy via Portainer → Stack → from repository:
 #   repository: https://github.com/your-org/llmux
@@ -11,10 +18,11 @@ version: "3.8"
 #
 # Or locally:
 #   docker compose -f docker-compose.yml up -d
+#   ./warmup.sh          # one-time: pre-build checkpoints for fast first wake
 #   curl http://localhost:11434/v1/models
 
 services:
-  # ── llmux proxy (CPU only) ────────────────────────────────────────────
+  # ── llmux proxy (CPU only) ─────────────────────────────────────────────
   llmux:
     build: ./
     env_file:
@@ -26,6 +34,7 @@ services:
       - LLMUX_CONFIG_PATH=/config/config.yaml
     volumes:
       - ./config.yaml:/config/config.yaml:ro
+      - llmux-checkpoints:/tmp/llmux-checkpoints
     depends_on:
       home_assistant:
         condition: service_healthy
@@ -40,10 +49,13 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ── home_assistant — general chat ──────────────────────────────────────
+  # ── home_assistant — general chat (high priority) ──────────────────────
   home_assistant:
     image: vllm/vllm-openai:v0.20.0-cu129
     hostname: home_assistant
+    # Must run without seccomp for CRIU checkpoint support
+    security_opt:
+      - seccomp:unconfined
     deploy:
       resources:
         reservations:
@@ -59,6 +71,7 @@ services:
         --pipeline-parallel-size 2
     volumes:
       - ${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+      - llmux-checkpoints:/ckpt
     environment:
       - HOME=/tmp
     healthcheck:
@@ -69,10 +82,12 @@ services:
       start_period: 120s
     restart: unless-stopped
 
-  # ── images — multimodal vision ────────────────────────────────────────
+  # ── images — multimodal vision (medium priority) ──────────────────────
   images:
     image: vllm/vllm-openai:v0.20.0-cu129
     hostname: images
+    security_opt:
+      - seccomp:unconfined
     deploy:
       resources:
         reservations:
@@ -87,6 +102,7 @@ services:
         --pipeline-parallel-size 2
     volumes:
       - ${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+      - llmux-checkpoints:/ckpt
     environment:
       - HOME=/tmp
     healthcheck:
@@ -97,10 +113,12 @@ services:
       start_period: 120s
     restart: unless-stopped
 
-  # ── embeddings — embedding-only ───────────────────────────────────────
+  # ── embeddings — embedding-only (low priority) ────────────────────────
   embeddings:
     image: vllm/vllm-openai:v0.20.0-cu129
     hostname: embeddings
+    security_opt:
+      - seccomp:unconfined
     deploy:
       resources:
         reservations:
@@ -116,6 +134,7 @@ services:
         --pipeline-parallel-size 2
     volumes:
       - ${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+      - llmux-checkpoints:/ckpt
     environment:
       - HOME=/tmp
     healthcheck:
@@ -125,6 +144,10 @@ services:
       retries: 5
       start_period: 120s
     restart: unless-stopped
+
+volumes:
+  llmux-checkpoints:
+    driver: local
 
 networks:
   default:

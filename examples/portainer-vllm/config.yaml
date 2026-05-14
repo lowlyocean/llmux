@@ -1,16 +1,18 @@
-# llmux configuration for Portainer + vLLM stack
+# llmux configuration for Docker + vLLM stack with CRIU checkpoint/restore.
 #
-# Each vLLM service runs a model behind a dedicated container. llmux acts
-# as a single-entry-point proxy on port 3000, routing requests to whichever
-# vLLM service is available.
+# Each vLLM container is checkpointed via `docker checkpoint create` when
+# switched out, then restored via `docker start --checkpoint` on the next
+# wake. This avoids cold-start times (~90s) and frees GPU memory for other
+# models.
 #
-# Priority ordering (higher value = served first):
-#   home_assistant: high (highest priority, always served first)
-#   images: medium
-#   embeddings: low (lowest, preempted by others)
+# All containers must run with `--security-opt=seccomp:unconfined` for CRIU
+# to capture the process tree. A shared checkpoint volume is mounted into
+# each container so checkpoints can be stored on the host.
 #
-# This maps directly to the llama.cpp presets.ini [home_assistant],
-# [images], [embeddings] sections where the `priority` key is used.
+# Priority ordering (higher value = served first, more resistant to preemption):
+#   home_assistant: high   (highest priority)
+#   images:        medium
+#   embeddings:    low    (lowest, preempted by others)
 #
 # Deploy via Portainer stack:
 #   - docker-compose.yml and this config.yaml live in a Git repo.
@@ -19,23 +21,184 @@
 models:
   home_assistant:
     port: 8001
-    wake: curl -sf http://localhost:8001/health
-    sleep: curl -sf http://localhost:8001/health
-    alive: curl -sf http://localhost:8001/health
     priority: high
+    wake: |
+      CONTAINER=portainer-vllm_home_assistant
+      if docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null | grep -q running; then
+        echo "  $CONTAINER already running"
+        exit 0
+      fi
+      echo "  Attempting restore from checkpoint..."
+      if docker start --checkpoint home_assistant_cp "$CONTAINER" 2>/dev/null; then
+        echo "  Restored. Waiting for health..."
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:8001/v1/models > /dev/null && exit 0
+          sleep 1
+        done
+        echo "  Restore failed, cold starting..."
+        docker rm -f "$CONTAINER" 2>/dev/null
+        docker run -d --name "$CONTAINER" \
+          --privileged --security-opt=seccomp:unconfined \
+          --gpus '"device=all"' \
+          -p 8001:8000 \
+          -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
+          -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
+          --env HOME=/tmp \
+          vllm/vllm-openai:v0.20.0-cu129 \
+            vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
+              --language-model-only \
+              --pipeline-parallel-size 2
+        for i in $(seq 1 120); do
+          curl -sf http://localhost:8001/v1/models > /dev/null && exit 0
+          sleep 1
+        done
+        exit 1
+      fi
+      # Full cold start (no checkpoint exists yet)
+      echo "  Full cold start..."
+      docker rm -f "$CONTAINER" 2>/dev/null
+      docker run -d --name "$CONTAINER" \
+        --privileged --security-opt=seccomp:unconfined \
+        --gpus '"device=all"' \
+        -p 8001:8000 \
+        -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
+        -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
+        --env HOME=/tmp \
+        vllm/vllm-openai:v0.20.0-cu129 \
+          vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
+            --language-model-only \
+            --pipeline-parallel-size 2
+      for i in $(seq 1 120); do
+        curl -sf http://localhost:8001/v1/models > /dev/null && exit 0
+        sleep 1
+      done
+      exit 1
+    sleep: |
+      CONTAINER=portainer-vllm_home_assistant
+      echo "  Checkpointing $CONTAINER..."
+      docker checkpoint create --checkpoint-dir /ckpt home_assistant_cp "$CONTAINER" 2>&1 || true
+      docker stop "$CONTAINER" 2>/dev/null || true
+      echo "  $CONTAINER checkpointed and stopped"
+    alive: curl -sf http://localhost:8001/v1/models
 
   images:
     port: 8002
-    wake: curl -sf http://localhost:8002/health
-    sleep: curl -sf http://localhost:8002/health
-    alive: curl -sf http://localhost:8002/health
     priority: medium
+    wake: |
+      CONTAINER=portainer-vllm_images
+      if docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null | grep -q running; then
+        echo "  $CONTAINER already running"
+        exit 0
+      fi
+      echo "  Attempting restore from checkpoint..."
+      if docker start --checkpoint images_cp "$CONTAINER" 2>/dev/null; then
+        echo "  Restored. Waiting for health..."
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:8002/v1/models > /dev/null && exit 0
+          sleep 1
+        done
+        echo "  Restore failed, cold starting..."
+        docker rm -f "$CONTAINER" 2>/dev/null
+        docker run -d --name "$CONTAINER" \
+          --privileged --security-opt=seccomp:unconfined \
+          --gpus '"device=all"' \
+          -p 8002:8000 \
+          -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
+          -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
+          --env HOME=/tmp \
+          vllm/vllm-openai:v0.20.0-cu129 \
+            vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
+              --pipeline-parallel-size 2
+        for i in $(seq 1 120); do
+          curl -sf http://localhost:8002/v1/models > /dev/null && exit 0
+          sleep 1
+        done
+        exit 1
+      fi
+      echo "  Full cold start..."
+      docker rm -f "$CONTAINER" 2>/dev/null
+      docker run -d --name "$CONTAINER" \
+        --privileged --security-opt=seccomp:unconfined \
+        --gpus '"device=all"' \
+        -p 8002:8000 \
+        -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
+        -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
+        --env HOME=/tmp \
+        vllm/vllm-openai:v0.20.0-cu129 \
+          vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
+            --pipeline-parallel-size 2
+      for i in $(seq 1 120); do
+        curl -sf http://localhost:8002/v1/models > /dev/null && exit 0
+        sleep 1
+      done
+      exit 1
+    sleep: |
+      CONTAINER=portainer-vllm_images
+      echo "  Checkpointing $CONTAINER..."
+      docker checkpoint create --checkpoint-dir /ckpt images_cp "$CONTAINER" 2>&1 || true
+      docker stop "$CONTAINER" 2>/dev/null || true
+      echo "  $CONTAINER checkpointed and stopped"
+    alive: curl -sf http://localhost:8002/v1/models
 
   embeddings:
     port: 8003
-    wake: curl -sf http://localhost:8003/health
-    sleep: curl -sf http://localhost:8003/health
-    alive: curl -sf http://localhost:8003/health
     priority: low
+    wake: |
+      CONTAINER=portainer-vllm_embeddings
+      if docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null | grep -q running; then
+        echo "  $CONTAINER already running"
+        exit 0
+      fi
+      echo "  Attempting restore from checkpoint..."
+      if docker start --checkpoint embeddings_cp "$CONTAINER" 2>/dev/null; then
+        echo "  Restored. Waiting for health..."
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:8003/v1/models > /dev/null && exit 0
+          sleep 1
+        done
+        echo "  Restore failed, cold starting..."
+        docker rm -f "$CONTAINER" 2>/dev/null
+        docker run -d --name "$CONTAINER" \
+          --privileged --security-opt=seccomp:unconfined \
+          --gpus '"device=all"' \
+          -p 8003:8000 \
+          -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
+          -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
+          --env HOME=/tmp \
+          vllm/vllm-openai:v0.20.0-cu129 \
+            vllm serve DevQuasar/Qwen.Qwen3-VL-Embedding-2B-GGUF:Q2_K \
+              --embedding \
+              --pipeline-parallel-size 2
+        for i in $(seq 1 120); do
+          curl -sf http://localhost:8003/v1/models > /dev/null && exit 0
+          sleep 1
+        done
+        exit 1
+      fi
+      echo "  Full cold start..."
+      docker rm -f "$CONTAINER" 2>/dev/null
+      docker run -d --name "$CONTAINER" \
+        --privileged --security-opt=seccomp:unconfined \
+        --gpus '"device=all"' \
+        -p 8003:8000 \
+        -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
+        -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
+        --env HOME=/tmp \
+        vllm/vllm-openai:v0.20.0-cu129 \
+          vllm serve DevQuasar/Qwen.Qwen3-VL-Embedding-2B-GGUF:Q2_K \
+            --embedding \
+            --pipeline-parallel-size 2
+      for i in $(seq 1 120); do
+        curl -sf http://localhost:8003/v1/models > /dev/null && exit 0
+        sleep 1
+      done
+      exit 1
+    sleep: |
+      CONTAINER=portainer-vllm_embeddings
+      echo "  Checkpointing $CONTAINER..."
+      docker checkpoint create --checkpoint-dir /ckpt embeddings_cp "$CONTAINER" 2>&1 || true
+      docker stop "$CONTAINER" 2>/dev/null || true
+      echo "  $CONTAINER checkpointed and stopped"
+    alive: curl -sf http://localhost:8003/v1/models
 
-port: 3000
+port: 11434

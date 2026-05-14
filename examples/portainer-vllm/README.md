@@ -1,144 +1,152 @@
-# Portainer stack with vLLM services
+# Portainer + vLLM + CRIU Checkpoint/Restore
 
-llmux as a single-entry-point proxy that routes requests to a fleet of
-vLLM containers, each serving a single model with all available GPUs.
-Mirrors the llama.cpp `presets.ini` configuration with three models:
+llmux routes requests to a single active vLLM model at a time, using Docker
+CRIU checkpoint/restore to switch between models without cold starts.
 
-| Service         | Priority | Model                              | GPU role          |
-|----------------|----------|------------------------------------|-------------------|
-| `home_assistant`| high     | Qwen3.6-35B-A3B (Chat)             | Main chat model   |
-| `images`       | medium   | Qwen3.6-35B-A3B + mmproj (Vision)  | Multimodal        |
-| `embeddings`   | low      | Qwen3-VL-Embedding-2B              | Embedding index   |
+## How it works
 
-All three models use all available GPUs. llmux ensures the highest-priority model
-is always running when a request comes in for a lower-priority model —
-it wakes the sleeping service before routing.
+| State | What happens | GPU memory |
+|-------|-------------|------------|
+| Active | One model runs, serving requests | ~20 GB |
+| Checkpointed | Container stopped, state saved to disk | 0 GB (freed) |
+
+When llmux switches away from a model, it runs `docker checkpoint create`,
+which uses CRIU to freeze the process, dump its memory + GPU state to disk,
+and stop the container. GPU memory is immediately freed for other models.
+
+On the next request for that model, llmux runs `docker start --checkpoint`,
+which restores the process from the saved state — ~10-15s vs ~60-100s cold
+start.
 
 ## Prerequisites
 
-- Docker (or Podman) with NVIDIA runtime support
-- NVIDIA driver >= 535 with CUDA 12.8 (vLLM v0.8.3 image)
-- One GPU with sufficient VRAM for the largest model (~35B + mmproj)
-- Models downloaded and mounted via bind mounts
+- **Docker** with CRIU support (systemd or docker-ce with criu)
+- **CRIU** installed: `sudo apt install criu` (or build from https://criu.org)
+- **NVIDIA driver** >= 535 (with `cuda-checkpoint` in driver package)
+- **GPU** with compute capability >= 3.5
+- **Docker Compose** v2
 
-## Deploy
+Verify CRIU works:
+```sh
+sudo criu check
+sudo docker checkpoint create --help
+```
 
-### Portainer
+## Usage
 
-1. **Stacks → from repository**
-2. **Git URL**: `https://github.com/your-org/llmux`
-3. **Git path**: `examples/portainer-vllm`
-4. **Container**: `llmux:latest` (or your image)
-5. Portainer creates the `llmux`, `home_assistant`, `images`, and
-   `embeddings` services and starts them.
+### 1. Deploy the stack
 
-### Local (from Dockerfile)
+Via Portainer:
+- Stack → Deploy from repository
+- Repository: `https://github.com/your-org/llmux`
+- Git folder: `examples/portainer-vllm`
+- Template: `docker-compose.yml`
 
+Or locally:
 ```sh
 docker compose -f docker-compose.yml up -d
 ```
 
-### Build llmux image locally
-
-llmux is built from the same Cargo workspace root using the Dockerfile:
+### 2. Pre-build checkpoints (one-time)
 
 ```sh
-docker build -t llmux:latest .
-docker compose -f examples/portainer-vllm/docker-compose.yml up -d
+chmod +x warmup.sh
+./warmup.sh
 ```
 
-## Configuration
+This cold-starts each model, waits for health, checkpoints it, then removes
+the container. All 3 checkpoints persist on the shared volume. After this,
+the first wake for any model is a fast restore instead of a cold start.
 
-### docker-compose.yml
-
-Defines the four services:
-
-- **llmux** — the proxy on port 3000. Reads `config.yaml` at startup.
-  Waits for all three vLLM services to be healthy before becoming healthy itself.
-- **home_assistant**, **images**, **embeddings** — vLLM containers running
-  their respective models using all available GPUs on the host.
-
-### config.yaml
-
-```yaml
-models:
-  home_assistant:
-    port: 8001
-    wake: curl -sf http://localhost:8001/health
-    sleep: curl -sf http://localhost:8001/health
-    alive: curl -sf http://localhost:8001/health
-    priority: high
-
-  images:
-    port: 8002
-    wake: curl -sf http://localhost:8002/health
-    sleep: curl -sf http://localhost:8002/health
-    alive: curl -sf http://localhost:8002/health
-    priority: medium
-
-  embeddings:
-    port: 8003
-    wake: curl -sf http://localhost:8003/health
-    sleep: curl -sf http://localhost:8003/health
-    alive: curl -sf http://localhost:8003/health
-    priority: low
-
-port: 3000
-```
-
-No wake/sleep scripts needed — vLLM stays running 24/7. llmux uses the
-`alive` health check to detect which model is available and routes
-accordingly. Priority ensures the highest-priority model stays running
-whenever a lower-priority model has pending requests.
-
-## Usage
+### 3. Run llmux
 
 ```sh
-# Chat with the main model (home_assistant, low priority)
-curl http://localhost:3000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"home_assistant","messages":[{"role":"user","content":"Hello"}],"max_tokens":100}'
-
-# Vision request (images, medium priority)
-curl http://localhost:3000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"images","messages":[{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}]}],"max_tokens":100}'
-
-# Embedding request (embeddings, low priority)
-curl http://localhost:3000/v1/embeddings \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"embeddings","input":["Hello world"]}'
+cargo run --release -- -c config.yaml -p 11434
 ```
 
-## GPU sharing
-
-All three vLLM services run on the same GPU. vLLM handles internal
-scheduling via:
-
-- `--flash-attention` — flash attention for faster inference
-- `--enable-chunked-prefill` — chunked prefill to reduce latency
-- Priority in llmux ensures the highest-priority model's context is
-  kept warm while lower-priority models share the remaining capacity.
-
-## Monitoring
+### 4. Send requests
 
 ```sh
-# List all available models (shows priority in response)
-curl http://localhost:3000/v1/models | jq .data[]
+# First request for home_assistant — cold start or restore (~10-90s depending)
+curl http://localhost:11434/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"home_assistant","messages":[{"role":"user","content":"Hello"}],"max_tokens":20}'
 
-# Check GPU memory
-nvidia-smi
-
-# Check health of each service
-curl http://localhost:8001/v1/models && echo OK || echo FAIL
-curl http://localhost:8002/v1/models && echo OK || echo FAIL
-curl http://localhost:8003/v1/models && echo OK || echo FAIL
+# Switch to images — checkpoints home_assistant, restores images
+curl http://localhost:11434/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"images","messages":[{"role":"user","content":"Describe this image"}],"max_tokens":20}'
 ```
+
+### 5. Check checkpoints
+
+```sh
+ls -lh /tmp/llmux-checkpoints/
+```
+
+## Architecture
+
+```
+llmux (proxy, port 11434)
+  │
+  ├── → home_assistant :8001  (high prio)  ← vLLM: Qwen3.6-35B
+  ├── → images :8002          (medium prio) ← vLLM: Qwen3.6-35B
+  └── → embeddings :8003      (low prio)    ← vLLM: Qwen3-VL-Embedding
+```
+
+Only **one model is active at a time**. Others are checkpointed and stopped,
+freeing all GPU memory. Priorities determine which model wins switch conflicts
+(home_assistant resists preemption, embeddings gets preempted first).
+
+## Wake/Sleep Hooks
+
+Each model in `config.yaml` has:
+
+- **wake**: Try `docker start --checkpoint` → fall back to `docker run`
+- **sleep**: `docker checkpoint create` + `docker stop`
+- **alive**: `curl` the v1/models endpoint
 
 ## Cleanup
 
+Restore containers to default state:
 ```sh
-docker compose -f docker-compose.yml down
-# Remove volumes (model caches)
-docker volume prune -f
+docker compose -f docker-compose.yml down -v
+rm -rf /tmp/llmux-checkpoints/*
+```
+
+## Why CRIU instead of just docker stop/start?
+
+| Aspect | Cold start | Checkpoint restore |
+|--------|-----------|-------------------|
+| Time | 60-100s | 10-15s |
+| GPU init | Full re-init | Resume from state |
+| KV cache | Recomputed | Preserved |
+| User experience | Visible delay | Transparent |
+
+CRIU captures the vLLM process tree, CUDA contexts, memory, and file state
+into a snapshot on disk. `docker start --checkpoint` injects that state back
+into a fresh container process — no model reload needed.
+
+## Troubleshooting
+
+**Checkpoint fails with "criu failed"**
+```sh
+# Ensure seccomp is disabled (already configured in docker-compose.yml)
+docker inspect <container> | grep Seccomp
+# Check CRIU
+sudo criu check
+# Check CUDA checkpoint support
+nvidia-smi
+which cuda-checkpoint
+```
+
+**Restore times out**
+- Ensure GPU driver matches the CUDA version in the vLLM image
+- Check GPU memory isn't consumed by other processes
+
+**Container not starting after restore**
+```sh
+# Clear checkpoints and re-warmup
+rm -rf /tmp/llmux-checkpoints/*
+./warmup.sh
 ```
