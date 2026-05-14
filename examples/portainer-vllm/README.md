@@ -52,7 +52,7 @@ Default ports:
 Via Portainer:
 - Stack → Deploy from repository
 - Repository: `https://github.com/your-org/llmux`
-- Git folder: `examples/portainer-vllm`
+- Git folder: `.`
 - Template: `docker-compose.yml`
 
 Or locally:
@@ -60,24 +60,24 @@ Or locally:
 docker compose -f docker-compose.yml up -d
 ```
 
-### 2. Pre-build checkpoints (one-time)
+### 3. Pre-build checkpoints (one-time)
 
 ```sh
-chmod +x warmup.sh
-./warmup.sh
+chmod +x ./examples/portainer-vllm/warmup.sh
+./examples/portainer-vllm/warmup.sh
 ```
 
 This cold-starts each model, waits for health, checkpoints it, then removes
 the container. All 3 checkpoints persist on the shared volume. After this,
 the first wake for any model is a fast restore instead of a cold start.
 
-### 3. Run llmux
+### 4. Run llmux (local dev)
 
 ```sh
-cargo run --release -- -c config.yaml -p ${LLMMUX_PORT:-11434}
+cargo run --release -- -c ./examples/portainer-vllm/config.yaml -p ${LLMMUX_PORT:-11434}
 ```
 
-### 4. Send requests
+### 5. Send requests
 
 ```sh
 # First request for home_assistant — cold start or restore (~10-90s depending)
@@ -91,7 +91,7 @@ curl "http://localhost:${LLMMUX_PORT:-11434}/v1/chat/completions" \
   -d '{"model":"images","messages":[{"role":"user","content":"Describe this image"}],"max_tokens":20}'
 ```
 
-### 5. Check checkpoints
+### 6. Check checkpoints
 
 ```sh
 ls -lh /tmp/llmux-checkpoints/
@@ -161,5 +161,6 @@ which cuda-checkpoint
 ```sh
 # Clear checkpoints and re-warmup
 rm -rf /tmp/llmux-checkpoints/*
-./warmup.sh
+chmod +x ./examples/portainer-vllm/warmup.sh
+./examples/portainer-vllm/warmup.sh
 ```

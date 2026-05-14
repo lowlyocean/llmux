@@ -1,0 +1,49 @@
+version: "3.8"
+
+# Portainer stack for llmux + vLLM services with CRIU checkpoint/restore.
+#
+# Ports are configurable via environment variables (defaults shown):
+#   LLMMUX_PORT=11434          llmux proxy port
+#   PORT_HA=8001               home_assistant port
+#   PORT_IMAGES=8002           images port
+#   PORT_EMBED=8003            embeddings port
+#
+# Deploy via Portainer → Stack → from repository:
+#   repository: https://github.com/your-org/llmux
+#   git_folder: .
+#   Template: docker-compose.yml
+#
+# Or locally:
+#   docker compose -f docker-compose.yml up -d
+#   ./warmup.sh          # one-time: pre-build checkpoints for fast first wake
+
+services:
+  # ── llmux proxy (CPU only) ─────────────────────────────────────────────
+  llmux:
+    build: .
+    env_file:
+      - ${ENV_FILE:-./stack.env}
+    hostname: llmux
+    ports:
+      - "${LLMMUX_PORT:-11434}:11434"
+    environment:
+      - LLMUX_CONFIG_PATH=/config/config.yaml
+    volumes:
+      - ${LLMUX_CONFIG:-./examples/portainer-vllm/config.yaml}:/config/config.yaml:ro
+      - llmux-checkpoints:/tmp/llmux-checkpoints
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/v1/models"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  llmux-checkpoints:
+    driver: local
+
+networks:
+  default:
+    name: llmux
+    driver: bridge
