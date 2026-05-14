@@ -14,13 +14,19 @@
 #   images:        medium
 #   embeddings:    low    (lowest, preempted by others)
 #
+# Ports are configurable via environment variables (defaults shown):
+#   PORT_HA=8001           home_assistant port
+#   PORT_IMAGES=8002       images port
+#   PORT_EMBED=8003        embeddings port
+#   LLMMUX_PORT=11434      llmux proxy port
+#
 # Deploy via Portainer stack:
 #   - docker-compose.yml and this config.yaml live in a Git repo.
 #   - Point Portainer to the repo → Portainer deploys all services.
 
 models:
   home_assistant:
-    port: 8001
+    port: ${PORT_HA:-8001}
     priority: high
     wake: |
       CONTAINER=llmux_home_assistant
@@ -32,7 +38,7 @@ models:
       if docker start --checkpoint home_assistant_cp "$CONTAINER" 2>/dev/null; then
         echo "  Restored. Waiting for health..."
         for i in $(seq 1 30); do
-          curl -sf http://localhost:8001/v1/models > /dev/null && exit 0
+          curl -sf http://localhost:${PORT_HA:-8001}/v1/models > /dev/null && exit 0
           sleep 1
         done
         echo "  Restore failed, cold starting..."
@@ -40,7 +46,7 @@ models:
         docker run -d --name "$CONTAINER" \
           --privileged --security-opt=seccomp:unconfined \
           --gpus '"device=all"' \
-          -p 8001:8000 \
+          -p ${PORT_HA:-8001}:8000 \
           -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
           -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
           --env HOME=/tmp \
@@ -49,7 +55,7 @@ models:
               --language-model-only \
               --pipeline-parallel-size 2
         for i in $(seq 1 120); do
-          curl -sf http://localhost:8001/v1/models > /dev/null && exit 0
+          curl -sf http://localhost:${PORT_HA:-8001}/v1/models > /dev/null && exit 0
           sleep 1
         done
         exit 1
@@ -60,7 +66,7 @@ models:
       docker run -d --name "$CONTAINER" \
         --privileged --security-opt=seccomp:unconfined \
         --gpus '"device=all"' \
-        -p 8001:8000 \
+        -p ${PORT_HA:-8001}:8000 \
         -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
         -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
         --env HOME=/tmp \
@@ -69,7 +75,7 @@ models:
             --language-model-only \
             --pipeline-parallel-size 2
       for i in $(seq 1 120); do
-        curl -sf http://localhost:8001/v1/models > /dev/null && exit 0
+        curl -sf http://localhost:${PORT_HA:-8001}/v1/models > /dev/null && exit 0
         sleep 1
       done
       exit 1
@@ -79,10 +85,10 @@ models:
       docker checkpoint create --checkpoint-dir /ckpt home_assistant_cp "$CONTAINER" 2>&1 || true
       docker stop "$CONTAINER" 2>/dev/null || true
       echo "  $CONTAINER checkpointed and stopped"
-    alive: curl -sf http://localhost:8001/v1/models
+    alive: curl -sf http://localhost:${PORT_HA:-8001}/v1/models
 
   images:
-    port: 8002
+    port: ${PORT_IMAGES:-8002}
     priority: medium
     wake: |
       CONTAINER=llmux_images
@@ -94,7 +100,7 @@ models:
       if docker start --checkpoint images_cp "$CONTAINER" 2>/dev/null; then
         echo "  Restored. Waiting for health..."
         for i in $(seq 1 30); do
-          curl -sf http://localhost:8002/v1/models > /dev/null && exit 0
+          curl -sf http://localhost:${PORT_IMAGES:-8002}/v1/models > /dev/null && exit 0
           sleep 1
         done
         echo "  Restore failed, cold starting..."
@@ -102,7 +108,7 @@ models:
         docker run -d --name "$CONTAINER" \
           --privileged --security-opt=seccomp:unconfined \
           --gpus '"device=all"' \
-          -p 8002:8000 \
+          -p ${PORT_IMAGES:-8002}:8000 \
           -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
           -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
           --env HOME=/tmp \
@@ -110,7 +116,7 @@ models:
             vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
               --pipeline-parallel-size 2
         for i in $(seq 1 120); do
-          curl -sf http://localhost:8002/v1/models > /dev/null && exit 0
+          curl -sf http://localhost:${PORT_IMAGES:-8002}/v1/models > /dev/null && exit 0
           sleep 1
         done
         exit 1
@@ -120,7 +126,7 @@ models:
       docker run -d --name "$CONTAINER" \
         --privileged --security-opt=seccomp:unconfined \
         --gpus '"device=all"' \
-        -p 8002:8000 \
+        -p ${PORT_IMAGES:-8002}:8000 \
         -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
         -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
         --env HOME=/tmp \
@@ -128,7 +134,7 @@ models:
           vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
             --pipeline-parallel-size 2
       for i in $(seq 1 120); do
-        curl -sf http://localhost:8002/v1/models > /dev/null && exit 0
+        curl -sf http://localhost:${PORT_IMAGES:-8002}/v1/models > /dev/null && exit 0
         sleep 1
       done
       exit 1
@@ -138,10 +144,10 @@ models:
       docker checkpoint create --checkpoint-dir /ckpt images_cp "$CONTAINER" 2>&1 || true
       docker stop "$CONTAINER" 2>/dev/null || true
       echo "  $CONTAINER checkpointed and stopped"
-    alive: curl -sf http://localhost:8002/v1/models
+    alive: curl -sf http://localhost:${PORT_IMAGES:-8002}/v1/models
 
   embeddings:
-    port: 8003
+    port: ${PORT_EMBED:-8003}
     priority: low
     wake: |
       CONTAINER=llmux_embeddings
@@ -153,7 +159,7 @@ models:
       if docker start --checkpoint embeddings_cp "$CONTAINER" 2>/dev/null; then
         echo "  Restored. Waiting for health..."
         for i in $(seq 1 30); do
-          curl -sf http://localhost:8003/v1/models > /dev/null && exit 0
+          curl -sf http://localhost:${PORT_EMBED:-8003}/v1/models > /dev/null && exit 0
           sleep 1
         done
         echo "  Restore failed, cold starting..."
@@ -161,7 +167,7 @@ models:
         docker run -d --name "$CONTAINER" \
           --privileged --security-opt=seccomp:unconfined \
           --gpus '"device=all"' \
-          -p 8003:8000 \
+          -p ${PORT_EMBED:-8003}:8000 \
           -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
           -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
           --env HOME=/tmp \
@@ -170,7 +176,7 @@ models:
               --embedding \
               --pipeline-parallel-size 2
         for i in $(seq 1 120); do
-          curl -sf http://localhost:8003/v1/models > /dev/null && exit 0
+          curl -sf http://localhost:${PORT_EMBED:-8003}/v1/models > /dev/null && exit 0
           sleep 1
         done
         exit 1
@@ -180,7 +186,7 @@ models:
       docker run -d --name "$CONTAINER" \
         --privileged --security-opt=seccomp:unconfined \
         --gpus '"device=all"' \
-        -p 8003:8000 \
+        -p ${PORT_EMBED:-8003}:8000 \
         -v "$${HFCACHE:-~/.cache/huggingface}:/root/.cache/huggingface" \
         -v "$${HFCKPT:-/tmp/llmux-checkpoints}:/ckpt" \
         --env HOME=/tmp \
@@ -189,7 +195,7 @@ models:
             --embedding \
             --pipeline-parallel-size 2
       for i in $(seq 1 120); do
-        curl -sf http://localhost:8003/v1/models > /dev/null && exit 0
+        curl -sf http://localhost:${PORT_EMBED:-8003}/v1/models > /dev/null && exit 0
         sleep 1
       done
       exit 1
@@ -199,6 +205,6 @@ models:
       docker checkpoint create --checkpoint-dir /ckpt embeddings_cp "$CONTAINER" 2>&1 || true
       docker stop "$CONTAINER" 2>/dev/null || true
       echo "  $CONTAINER checkpointed and stopped"
-    alive: curl -sf http://localhost:8003/v1/models
+    alive: curl -sf http://localhost:${PORT_EMBED:-8003}/v1/models
 
-port: 11434
+port: ${LLMMUX_PORT:-11434}

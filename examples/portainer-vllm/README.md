@@ -34,7 +34,20 @@ sudo docker checkpoint create --help
 
 ## Usage
 
-### 1. Deploy the stack
+### 1. Configure ports
+
+Copy `.env.example` to `.env` and edit values:
+```sh
+cp .env.example .env
+```
+
+Default ports:
+- `LLMMUX_PORT=11434` — llmux proxy
+- `PORT_HA=8001` — home_assistant
+- `PORT_IMAGES=8002` — images
+- `PORT_EMBED=8003` — embeddings
+
+### 2. Deploy the stack
 
 Via Portainer:
 - Stack → Deploy from repository
@@ -61,19 +74,19 @@ the first wake for any model is a fast restore instead of a cold start.
 ### 3. Run llmux
 
 ```sh
-cargo run --release -- -c config.yaml -p 11434
+cargo run --release -- -c config.yaml -p ${LLMMUX_PORT:-11434}
 ```
 
 ### 4. Send requests
 
 ```sh
 # First request for home_assistant — cold start or restore (~10-90s depending)
-curl http://localhost:11434/v1/chat/completions \
+curl "http://localhost:${LLMMUX_PORT:-11434}/v1/chat/completions" \
   -H 'Content-Type: application/json' \
   -d '{"model":"home_assistant","messages":[{"role":"user","content":"Hello"}],"max_tokens":20}'
 
 # Switch to images — checkpoints home_assistant, restores images
-curl http://localhost:11434/v1/chat/completions \
+curl "http://localhost:${LLMMUX_PORT:-11434}/v1/chat/completions" \
   -H 'Content-Type: application/json' \
   -d '{"model":"images","messages":[{"role":"user","content":"Describe this image"}],"max_tokens":20}'
 ```

@@ -76,16 +76,16 @@ docker rm -f "$name" 2>/dev/null || true
 
 # ── Models ───────────────────────────────────────────────────────────────
 
-warmup_model "portainer-vllm_home_assistant" 8001 "home_assistant_cp" \
+warmup_model "llmux_home_assistant" "${PORT_HA:-8001}" "home_assistant_cp" \
   vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
     --language-model-only \
     --pipeline-parallel-size 2
 
-warmup_model "portainer-vllm_images" 8002 "images_cp" \
+warmup_model "llmux_images" "${PORT_IMAGES:-8002}" "images_cp" \
   vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
     --pipeline-parallel-size 2
 
-warmup_model "portainer-vllm_embeddings" 8003 "embeddings_cp" \
+warmup_model "llmux_embeddings" "${PORT_EMBED:-8003}" "embeddings_cp" \
   vllm serve DevQuasar/Qwen.Qwen3-VL-Embedding-2B-GGUF:Q2_K \
     --embedding \
     --pipeline-parallel-size 2
