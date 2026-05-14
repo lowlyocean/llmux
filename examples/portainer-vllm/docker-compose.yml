@@ -52,6 +52,7 @@ services:
   # ── home_assistant — general chat (high priority) ──────────────────────
   home_assistant:
     image: vllm/vllm-openai:v0.20.0-cu129
+    container_name: llmux_home_assistant
     hostname: home_assistant
     # Must run without seccomp for CRIU checkpoint support
     security_opt:
@@ -85,6 +86,7 @@ services:
   # ── images — multimodal vision (medium priority) ──────────────────────
   images:
     image: vllm/vllm-openai:v0.20.0-cu129
+    container_name: llmux_images
     hostname: images
     security_opt:
       - seccomp:unconfined
@@ -116,6 +118,7 @@ services:
   # ── embeddings — embedding-only (low priority) ────────────────────────
   embeddings:
     image: vllm/vllm-openai:v0.20.0-cu129
+    container_name: llmux_embeddings
     hostname: embeddings
     security_opt:
       - seccomp:unconfined

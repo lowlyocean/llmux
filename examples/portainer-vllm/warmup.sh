@@ -33,8 +33,8 @@ warmup_model() {
 
   echo "=== Warming up $name (port $port, checkpoint $ckpt_name) ==="
 
-  # Clean up
-  docker rm -f "$name" 2>/dev/null || true
+# Remove if already exists (from a previous run)
+docker rm -f "$name" 2>/dev/null || true
 
   # Cold start
   echo "  Starting $name..."

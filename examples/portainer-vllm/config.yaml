@@ -23,7 +23,7 @@ models:
     port: 8001
     priority: high
     wake: |
-      CONTAINER=portainer-vllm_home_assistant
+      CONTAINER=llmux_home_assistant
       if docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null | grep -q running; then
         echo "  $CONTAINER already running"
         exit 0
@@ -74,7 +74,7 @@ models:
       done
       exit 1
     sleep: |
-      CONTAINER=portainer-vllm_home_assistant
+      CONTAINER=llmux_home_assistant
       echo "  Checkpointing $CONTAINER..."
       docker checkpoint create --checkpoint-dir /ckpt home_assistant_cp "$CONTAINER" 2>&1 || true
       docker stop "$CONTAINER" 2>/dev/null || true
@@ -85,7 +85,7 @@ models:
     port: 8002
     priority: medium
     wake: |
-      CONTAINER=portainer-vllm_images
+      CONTAINER=llmux_images
       if docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null | grep -q running; then
         echo "  $CONTAINER already running"
         exit 0
@@ -133,7 +133,7 @@ models:
       done
       exit 1
     sleep: |
-      CONTAINER=portainer-vllm_images
+      CONTAINER=llmux_images
       echo "  Checkpointing $CONTAINER..."
       docker checkpoint create --checkpoint-dir /ckpt images_cp "$CONTAINER" 2>&1 || true
       docker stop "$CONTAINER" 2>/dev/null || true
@@ -144,7 +144,7 @@ models:
     port: 8003
     priority: low
     wake: |
-      CONTAINER=portainer-vllm_embeddings
+      CONTAINER=llmux_embeddings
       if docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null | grep -q running; then
         echo "  $CONTAINER already running"
         exit 0
@@ -194,7 +194,7 @@ models:
       done
       exit 1
     sleep: |
-      CONTAINER=portainer-vllm_embeddings
+      CONTAINER=llmux_embeddings
       echo "  Checkpointing $CONTAINER..."
       docker checkpoint create --checkpoint-dir /ckpt embeddings_cp "$CONTAINER" 2>&1 || true
       docker stop "$CONTAINER" 2>/dev/null || true
