@@ -19,7 +19,8 @@ set -eu
 
 HF_CACHE="${HFCACHE:-$HOME/.cache/huggingface}"
 CKPT_DIR="/tmp/llmux-checkpoints"
-IMAGE="vllm/vllm-openai:v0.20.0-cu129"
+IMAGE="vllm/vllm-openai:v0.21.0-cu129"
+MODEL_PATH="${MODEL_PATH:-./models}"
 MAX_WAIT=120
 
 mkdir -p "$CKPT_DIR"
@@ -40,11 +41,13 @@ docker rm -f "$name" 2>/dev/null || true
   echo "  Starting $name..."
   docker run -d --name "$name" \
     --privileged --security-opt=seccomp:unconfined \
-    --gpus '"device=all"' \
+    --runtime nvidia --gpus all \
     -p "$port:8000" \
-    -v "$HF_CACHE:/root/.cache/huggingface" \
     -v "$CKPT_DIR:/ckpt" \
+    -v "$MODEL_PATH:/root/models" \
+    -v "$HF_CACHE:/root/.cache/huggingface" \
     --env HOME=/tmp \
+    --ipc=host \
     "$IMAGE" \
     "${cmd[@]}"
 
@@ -77,16 +80,20 @@ docker rm -f "$name" 2>/dev/null || true
 # ── Models ───────────────────────────────────────────────────────────────
 
 warmup_model "llmux_home_assistant" "${PORT_HA:-8001}" "home_assistant_cp" \
-  vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
+    --model "unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_XXS" \
     --language-model-only \
-    --pipeline-parallel-size 2
+    --pipeline-parallel-size 2 \
+    --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --hf-config-path Qwen/Qwen3.6-35B-A3B --speculative-config '{"method":"mtp","num_speculative_tokens":2}' \
+    --tokenizer Qwen/Qwen3.6-35B-A3B
 
 warmup_model "llmux_images" "${PORT_IMAGES:-8002}" "images_cp" \
-  vllm serve unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_M \
-    --pipeline-parallel-size 2
+    --model "unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ2_XXS" \
+    --pipeline-parallel-size 2 \
+    --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --hf-config-path Qwen/Qwen3.6-35B-A3B --speculative-config '{"method":"mtp","num_speculative_tokens":2}' \
+    --tokenizer Qwen/Qwen3.6-35B-A3B
 
 warmup_model "llmux_embeddings" "${PORT_EMBED:-8003}" "embeddings_cp" \
-  vllm serve DevQuasar/Qwen.Qwen3-VL-Embedding-2B-GGUF:Q2_K \
+    --model "DevQuasar/Qwen.Qwen3-VL-Embedding-2B-GGUF:Q2_K" \
     --embedding \
     --pipeline-parallel-size 2
 
